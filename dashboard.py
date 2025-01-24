@@ -1,3 +1,4 @@
+# dashboard.py
 import streamlit as st
 from sales_management import sales_management_page
 from cost_management import cost_management_page

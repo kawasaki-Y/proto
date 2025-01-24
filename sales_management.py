@@ -2,155 +2,146 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from database import Database
-from datetime import date
+import math
 from pptx import Presentation
 from pptx.util import Inches
-import os
 
-def save_chart_as_image(chart, filename):
-    """Altairのグラフを画像として保存"""
-    chart.save(filename, scale_factor=2)
 
-def generate_pptx_with_charts(comparison_chart, monthly_chart, pie_chart):
+def generate_sales_pptx(bar_chart_img, line_chart_img, pie_chart_img, total_sales, sales_difference):
     """PowerPointファイルを生成"""
     ppt = Presentation()
 
-    # スライド1: 予実比較
+    # スライド1: 棒グラフ
     slide = ppt.slides.add_slide(ppt.slide_layouts[5])
-    title = slide.shapes.title
-    title.text = "予実比較"
-    save_chart_as_image(comparison_chart, "comparison_chart.png")
-    slide.shapes.add_picture("comparison_chart.png", Inches(1), Inches(1.5), width=Inches(6))
-    os.remove("comparison_chart.png")
+    slide.shapes.title.text = "売上データ（棒グラフ）"
+    slide.shapes.add_picture(bar_chart_img, Inches(1), Inches(1.5), width=Inches(6))
 
-    # スライド2: 月毎売上
+    # スライド2: 折れ線グラフ
     slide = ppt.slides.add_slide(ppt.slide_layouts[5])
-    title = slide.shapes.title
-    title.text = "月毎売上"
-    save_chart_as_image(monthly_chart, "monthly_chart.png")
-    slide.shapes.add_picture("monthly_chart.png", Inches(1), Inches(1.5), width=Inches(6))
-    os.remove("monthly_chart.png")
+    slide.shapes.title.text = "売上データ（折れ線グラフ）"
+    slide.shapes.add_picture(line_chart_img, Inches(1), Inches(1.5), width=Inches(6))
 
-    # スライド3: タグ別売上比率
+    # スライド3: 円グラフ
     slide = ppt.slides.add_slide(ppt.slide_layouts[5])
-    title = slide.shapes.title
-    title.text = "タグ別売上比率"
-    save_chart_as_image(pie_chart, "pie_chart.png")
-    slide.shapes.add_picture("pie_chart.png", Inches(1), Inches(1.5), width=Inches(6))
-    os.remove("pie_chart.png")
+    slide.shapes.title.text = "売上データ（円グラフ）"
+    slide.shapes.add_picture(pie_chart_img, Inches(1), Inches(1.5), width=Inches(6))
 
-    # PowerPointファイルを保存
-    ppt.save("sales_charts.pptx")
-    return "sales_charts.pptx"
+    # スライド4: 総売上と目標差分
+    slide = ppt.slides.add_slide(ppt.slide_layouts[5])
+    slide.shapes.title.text = "総売上と目標差分"
+    textbox = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(8), Inches(2))
+    textbox.text = f"総売上: {total_sales:,} 千円\n目標との差分: {sales_difference:+,} 千円"
+
+    pptx_file = "sales_report.pptx"
+    ppt.save(pptx_file)
+    return pptx_file
+
 
 def sales_management_page():
     st.header("売上管理")
 
-    # 登録済み目標売上を取得
-    target_data = Database.fetch_data("SELECT amount FROM target_revenue")
-    if not target_data:
-        st.warning("目標売上が登録されていません。'タグと目標売上の登録' ページで登録してください。")
-        return
-    target_revenue = round(target_data[0][0], 0)
-    st.write(f"年間目標売上高: {int(target_revenue):,} 千円")
-
-    # タグリストを取得
+    # 登録済みタグを取得
     tags_data = Database.fetch_data("SELECT tag_name FROM tags")
-    tags = [row[0] for row in tags_data]
-    if not tags:
-        st.warning("タグが登録されていません。'タグと目標売上の登録' ページで登録してください。")
-        return
+    tags = [tag[0] for tag in tags_data]
 
-    # 売上登録フォーム
-    st.subheader("売上登録")
+    # 売上データ登録フォーム
     with st.form("sales_form"):
         project = st.text_input("案件名")
-        selected_tag = st.selectbox("タグを選択", options=tags)
-        revenue = st.number_input("売上高（千円単位）", min_value=0, step=100, format="%.0f")
-        date_input = st.date_input("日付", value=date.today())
-        submitted_sales = st.form_submit_button("登録")
-        if submitted_sales:
+        tag = st.selectbox("タグ", options=tags if tags else ["タグなし"])
+        revenue = st.number_input("売上金額（千円単位）", min_value=0, step=1)  # 千円単位で入力
+        date = st.date_input("日付")
+        submitted = st.form_submit_button("登録")
+        if submitted:
             Database.execute_query(
                 "INSERT INTO sales (project, tag, revenue, date) VALUES (?, ?, ?, ?)",
-                (project, selected_tag, round(revenue, 0), str(date_input))
+                (project, tag, revenue, str(date))
             )
-            st.success(f"案件 '{project}' を登録しました！")
-            st.session_state["refresh"] = True
+            st.success("売上データを登録しました！")
+            st.experimental_set_query_params(updated="true")
 
-    # 売上データの取得
-    sales_data = Database.fetch_data("SELECT id, project, tag, revenue, date FROM sales")
-    df = pd.DataFrame(sales_data, columns=["ID", "案件名", "タグ", "売上高（千円）", "日付"])
+    # 売上データ取得
+    data = Database.fetch_data("SELECT id, project, tag, revenue, date FROM sales")
+    df = pd.DataFrame(data, columns=["ID", "案件名", "タグ", "売上金額", "日付"])
+    df["売上金額"] = df["売上金額"].apply(lambda x: math.floor(x))  # 小数点以下を切り捨て
+    df.insert(0, "番号", range(1, len(df) + 1))  # 行番号を1から開始
 
     if not df.empty:
-        # 表データの準備（番号を追加）
-        df["売上高（千円）"] = df["売上高（千円）"].round(0)
-        df["番号"] = range(1, len(df) + 1)
-        total_revenue = df["売上高（千円）"].sum()
+        st.subheader("売上データ一覧")
+        st.dataframe(df[["番号", "案件名", "タグ", "売上金額", "日付"]], use_container_width=True)
 
-        # 表の表示とボタン（編集・削除）
-        st.subheader("売上データ（表形式）")
-        for _, row in df.iterrows():
-            col1, col2, col3 = st.columns([6, 2, 2])
-            with col1:
-                st.text(f"{row['番号']} | {row['案件名']} | {row['タグ']} | {row['売上高（千円）']} 千円 | {row['日付']}")
-            with col2:
-                if st.button("編集", key=f"edit_{row['ID']}"):
-                    with st.form(f"edit_form_{row['ID']}"):
-                        new_project = st.text_input("案件名", value=row["案件名"])
-                        new_tag = st.selectbox("タグ", options=tags, index=tags.index(row["タグ"]))
-                        new_revenue = st.number_input("売上高（千円単位）", min_value=0, value=int(row["売上高（千円）"]), step=100)
-                        new_date = st.date_input("日付", value=pd.to_datetime(row["日付"]))
-                        submitted_edit = st.form_submit_button("更新")
-                        if submitted_edit:
-                            Database.execute_query(
-                                "UPDATE sales SET project = ?, tag = ?, revenue = ?, date = ? WHERE id = ?",
-                                (new_project, new_tag, round(new_revenue, 0), str(new_date), row["ID"])
-                            )
-                            st.success(f"案件 '{new_project}' を更新しました！")
-                            st.session_state["refresh"] = True
-            with col3:
-                if st.button("削除", key=f"delete_{row['ID']}"):
-                    Database.execute_query("DELETE FROM sales WHERE id = ?", (row["ID"],))
-                    st.success(f"案件 '{row['案件名']}' を削除しました！")
-                    st.session_state["refresh"] = True
+        # 目標売上の取得
+        target_revenue_data = Database.fetch_data("SELECT amount FROM target_revenue")
+        target_revenue = math.floor(target_revenue_data[0][0]) if target_revenue_data else 0
 
-        # 合計売上
-        st.write(f"合計売上: {int(total_revenue):,} 千円")
+        # 総売上の計算
+        total_sales = df["売上金額"].sum()
+        sales_difference = total_sales - target_revenue
 
-        # グラフの作成（サーモンピンク色で設定）
-        st.subheader("売上グラフ")
-        comparison_data = pd.DataFrame({
-            "項目": ["目標売上高", "実績売上高"],
-            "金額（千円）": [target_revenue, total_revenue]
-        })
-        comparison_chart = alt.Chart(comparison_data).mark_bar(color="salmon").encode(
-            x="項目:N",
-            y="金額（千円）:Q"
+        # 目標売上と差分を表示
+        st.metric("目標売上", f"{target_revenue:,} 千円")
+        st.metric("総売上", f"{total_sales:,} 千円")
+        st.metric("目標との差分", f"{sales_difference:+,} 千円")
+
+        # データ編集と削除
+        st.subheader("データ編集・削除")
+        selected_row = st.selectbox(
+            "編集・削除するデータを選択",
+            options=df.to_dict(orient="records"),
+            format_func=lambda x: f"{x['案件名']} - {x['売上金額']}千円 - {x['日付']}"
         )
-        st.altair_chart(comparison_chart, use_container_width=True)
+        edit_project = st.text_input("新しい案件名", value=selected_row["案件名"], key="edit_project")
+        edit_revenue = st.number_input("新しい売上金額（千円単位）", value=selected_row["売上金額"], min_value=0, step=1, key="edit_revenue")
+        edit_date = st.date_input("新しい日付", value=pd.to_datetime(selected_row["日付"]), key="edit_date")
 
-        # 月毎売上（折れ線グラフ）
-        df["月"] = pd.to_datetime(df["日付"]).dt.to_period("M")
-        monthly_sales = df.groupby("月")["売上高（千円）"].sum().reset_index()
-        monthly_chart = alt.Chart(monthly_sales).mark_line(color="salmon").encode(
-            x="月:T",
-            y="売上高（千円）:Q"
-        )
-        st.altair_chart(monthly_chart, use_container_width=True)
+        if st.button("変更を保存"):
+            Database.execute_query(
+                "UPDATE sales SET project = ?, revenue = ?, date = ? WHERE id = ?",
+                (edit_project, edit_revenue, str(edit_date), selected_row["ID"])
+            )
+            st.success("データを更新しました！")
+            st.experimental_set_query_params(updated="true")
 
-        # タグ別売上比率（円グラフ）
-        tag_sales = df.groupby("タグ")["売上高（千円）"].sum().reset_index()
-        pie_chart = alt.Chart(tag_sales).mark_arc(innerRadius=50).encode(
-            theta="売上高（千円）:Q",
-            color="タグ:N",
-            tooltip=["タグ", "売上高（千円）"]
-        )
+        if st.button("データを削除"):
+            Database.execute_query("DELETE FROM sales WHERE id = ?", (selected_row["ID"],))
+            st.success("データを削除しました！")
+            st.experimental_set_query_params(updated="true")
+
+        # グラフ作成
+        st.subheader("売上データのグラフ")
+
+        # 月単位のデータに変換
+        df["月"] = pd.to_datetime(df["日付"]).dt.strftime("%Y年%m月")
+
+        # 棒グラフ
+        bar_chart = alt.Chart(df).mark_bar().encode(
+            x="案件名:N",
+            y="売上金額:Q",
+            color=alt.Color("タグ:N", scale=alt.Scale(scheme="blues")),
+            tooltip=["案件名", "タグ", "売上金額", "日付"]
+        ).properties(width=700, height=400)
+        st.altair_chart(bar_chart, use_container_width=True)
+
+        # 折れ線グラフ
+        line_chart = alt.Chart(df).mark_line(point=True).encode(
+            x=alt.X("月:O", title="月"),
+            y=alt.Y("売上金額:Q", title="売上金額（千円）"),
+            color=alt.Color("タグ:N", title="タグ"),
+            tooltip=["案件名", "売上金額", "月"]
+        ).properties(width=700, height=400)
+        st.altair_chart(line_chart, use_container_width=True)
+
+        # 円グラフ
+        pie_chart = alt.Chart(df).mark_arc().encode(
+            theta="売上金額:Q",
+            color=alt.Color("タグ:N", scale=alt.Scale(scheme="blues")),
+            tooltip=["タグ", "売上金額"]
+        ).properties(width=700, height=400)
         st.altair_chart(pie_chart, use_container_width=True)
 
-        # グラフをPowerPointにダウンロード
-        st.subheader("グラフのエクスポート")
+        # PowerPointエクスポート
+        st.subheader("PowerPointエクスポート")
         if st.button("PowerPointファイルをダウンロード"):
-            pptx_file = generate_pptx_with_charts(comparison_chart, monthly_chart, pie_chart)
+            pptx_file = generate_sales_pptx("bar_chart.png", "line_chart.png", "pie_chart.png", total_sales, sales_difference)
             with open(pptx_file, "rb") as file:
                 st.download_button(
                     label="PowerPointをダウンロード",
@@ -158,25 +149,3 @@ def sales_management_page():
                     file_name=pptx_file,
                     mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
                 )
-            os.remove(pptx_file)
-
-        # SQLファイルダウンロード
-        st.subheader("データエクスポート")
-        if st.button("SQLファイルをダウンロード"):
-            sql_file_path = "sales_data.sql"
-            with open(sql_file_path, "w") as f:
-                conn = Database.get_connection()
-                for line in conn.iterdump():
-                    f.write(f"{line}\n")
-                conn.close()
-            with open(sql_file_path, "rb") as file:
-                st.download_button(
-                    label="SQLファイルをダウンロード",
-                    data=file,
-                    file_name=sql_file_path,
-                    mime="application/sql"
-                )
-            os.remove(sql_file_path)
-
-if "refresh" in st.session_state:
-    st.session_state.pop("refresh")
