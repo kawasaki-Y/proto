@@ -1,6 +1,5 @@
 streamlit
+matplotlib
 pandas
 altair
-numpy
-python-pptx
-pillow
+pptx
